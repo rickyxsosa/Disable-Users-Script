@@ -1,45 +1,81 @@
 # Script to clean up disabled users
-
-
-$Color = "Yellow"
-
+# -Ricky Sosa
 
 Import-Module ActiveDirectory
 
+# ------------------------------------------------------------------------------------
+# Various Variables (Tabbed lines are the ones you mostly want to set)
+# ------------------------------------------------------------------------------------
+
+# Output Color
+    $Color = "Yellow"
+
+# Current Date
+$CurrentDate = Get-Date
+$CurrentDate = $CurrentDate.ToString('MM-dd-yyyy')
+
 # Set the number of days since last logon
-$DaysInactive = 90
+    $DaysInactive = 90
 $InactiveDate = (Get-Date).Adddays(-($DaysInactive))
   
+# Exclude Group
+    $FHsgExcludeDisableScript = Get-ADGroup "FHsgExcludeDisableScript" -Properties DistinguishedName, Members
+    $ExclusionGroup = $FHsgExcludeDisableScript
 
-#Exclude Group
-$FHsgExcludeDisableScript = Get-ADGroup "FHsgExcludeDisableScript" -Properties DistinguishedName, Members
+# Search OU's
+    $FHOUDN = "OU=Users,OU=MCC,DC=millcreek,DC=local"
+    $MCCOUDN = "OU=UsersOU,OU=MCC,OU=SitesOU,DC=millcreek,DC=local"
+    $OVOUDN = "OU=UsersOU,OU=OJV,OU=SitesOU,DC=millcreek,DC=local"
+    $FHOVOUDN = "OU=Users,OU=OV,DC=millcreek,DC=local"
+    $OUS = "$FHOUDN","$MCCOUDN","$OVOUDN","$FHOVOUDN"
+
+# Exclude OU's
+    $FHITOUDN = "OU=Information Systems,OU=Users,OU=MCC,DC=millcreek,DC=local"
+    $ExcludeOU = $FHITOUDN
+
+# CSV Output Files with date
+    $InactiveUsersFile = "C:\ScriptOutput\InactiveUsers\InactiveUsers-$CurrentDate.csv"
+    $DisabledUserGroupsFile = "C:\ScriptOutput\DisabledUserGroups\DisabledUserGroups-$CurrentDate.csv"
+
+# Disabled Users Groups
+    $MCCsgDisabledUsers = Get-ADGroup -Identity MCCsgDisabledUsers
+    $OJVsgDisabledUsers = Get-ADGroup -Identity OJVsgDisabledUsers
+    $MCCsgDisabledUsersID = (Get-ADGroup $MCCsgDisabledUsers).SID.Value.split('-')[-1]
+    $OJVsgDisabledUsersID = (Get-ADGroup $OJVsgDisabledUsers).SID.Value.split('-')[-1]
+
+# Disable Users OU's
+    $MCCDisabledOU = Get-ADOrganizationalUnit -Identity "OU=DisabledOU,OU=MCC,OU=SitesOU,DC=millcreek,DC=local"
+    $OJVDisabledOU = Get-ADOrganizationalUnit -Identity "OU=DisabledOU,OU=OJV,OU=SitesOU,DC=millcreek,DC=local"
+
+# Email Variables
+    $EmailTo = "ricky@systemgoit.com", "jonl@foresthome.org"
+    $EmailSubject = "Disabled User List from $CurrentDate"
+    $EmailSMTPServer = "smtp.office365.com"
+    $EmailFrom = "itcloudadmin@foresthome.org"
+    $EmailAttachments = "$InactiveUsersFile", "$DisabledUserGroupsFile"
+
+# Credential Manager Module 
+$CredManagerPath = "C:\Users\svc_adscripts\Documents\Credentials\CredentialManager.psm1"
 
 
-#OU's
-$FHOUDN = "OU=Users,OU=MCC,DC=millcreek,DC=local"
-$MCCOUDN = "OU=UsersOU,OU=MCC,OU=SitesOU,DC=millcreek,DC=local"
-$OVOUDN = "OU=UsersOU,OU=OJV,OU=SitesOU,DC=millcreek,DC=local"
-$FHITOUDN = "OU=Information Systems,OU=Users,OU=MCC,DC=millcreek,DC=local"
-$FHOVOUDN = "OU=Users,OU=OV,DC=millcreek,DC=local"
-$OUS = "$FHOUDN","$MCCOUDN","$OVOUDN","$FHOVOUDN"
+# ---------------------------------------------
+# Script starts here
+# ---------------------------------------------
+
 
 # This gets all enabled users that havent logged on in the last 90 days, from the OU's listed above, that arent service accounts
-$InitialUsers = $OUS | Foreach { Get-ADUser -Filter { LastLogonDate -lt $InactiveDate -and Enabled -eq $true -and SamAccountName -notlike "*svc*" } -SearchBase $_ -Properties LastLogonDate, MemberOf, SamAccountName} | Where-Object {$_.distinguishedName -notlike "*,$FHITOUDN"} | Select-Object @{ Name="Username"; Expression={$_.SamAccountName} }, Name, LastLogonDate, DistinguishedName, SamAccountName, MemberOf
+$InitialUsers = $OUS | Foreach { Get-ADUser -Filter { LastLogonDate -lt $InactiveDate -and Enabled -eq $true -and SamAccountName -notlike "*svc*" } -SearchBase $_ -Properties LastLogonDate, MemberOf, SamAccountName} | Where-Object {$_.distinguishedName -notlike "*,$ExcludeOU"} | Select-Object @{ Name="Username"; Expression={$_.SamAccountName} }, Name, LastLogonDate, DistinguishedName, SamAccountName, MemberOf
 
 # Removes any users from the FHsgExcludeDisableScript group
 $Users = @()
 Foreach ($Person in $InitialUsers) {
-$ExcludeGroups = $FHsgExcludeDisableScript.Members
+$ExcludeGroups = $ExclusionGroup.Members
 $ExcludeCheck = $false
 $Person.MemberOf | ForEach-Object {if($_ -in $ExcludeGroups){$ExcludeCheck = $true}}
 if ($ExcludeCheck -eq $false){$Users += $Person}
 }
 
 # Export results to CSV with date
-$CurrentDate = Get-Date
-$CurrentDate = $CurrentDate.ToString('MM-dd-yyyy')
-$InactiveUsersFile = "C:\ScriptOutput\InactiveUsers\InactiveUsers-$CurrentDate.csv"
-$DisabledUserGroupsFile = "C:\ScriptOutput\DisabledUserGroups\DisabledUserGroups-$CurrentDate.csv"
 $Users | Export-Csv -Path $InactiveUsersFile -Append -NoTypeInformation
 
 # Disable Inactive Users
@@ -76,10 +112,6 @@ Write-Host "Exported Users and Groups to $DisabledUserGroupsFile" -ForegroundCol
 "`n" # new line for spacing
 
 # Adds to appropriate DisabledUsers group and sets it as primary, also hides from the GAL
-$MCCsgDisabledUsers = Get-ADGroup -Identity MCCsgDisabledUsers
-$OJVsgDisabledUsers = Get-ADGroup -Identity OJVsgDisabledUsers
-$MCCsgDisabledUsersID = (Get-ADGroup $MCCsgDisabledUsers).SID.Value.split('-')[-1]
-$OJVsgDisabledUsersID = (Get-ADGroup $OJVsgDisabledUsers).SID.Value.split('-')[-1]
 ForEach ($ADUser in $Users)
 {
     Set-ADUser $ADUser.SamAccountName -Replace @{msExchHideFromAddressLists=$true}   
@@ -119,8 +151,6 @@ ForEach ($ADUser in $Users)
 "`n" # new line for spacing
 
 # Moves to appropriate Disabled OU
-$MCCDisabledOU = Get-ADOrganizationalUnit -Identity "OU=DisabledOU,OU=MCC,OU=SitesOU,DC=millcreek,DC=local"
-$OJVDisabledOU = Get-ADOrganizationalUnit -Identity "OU=DisabledOU,OU=OJV,OU=SitesOU,DC=millcreek,DC=local"
 ForEach ($ADUser in $Users)
 {
     If ($ADUser.DistinguishedName -like "*,$FHOUDN" -or $ADUser.DistinguishedName -like "*,$MCCOUDN")
@@ -136,15 +166,9 @@ ForEach ($ADUser in $Users)
 }
 
 # Send Email with log files to admins
-Import-Module "C:\Users\svc_adscripts\Documents\Credentials\CredentialManager.psm1"
 $UsersNames = ($Users.Name -join "
 ")
-$EmailTo = "ricky@systemgoit.com", "jonl@foresthome.org"
+Import-Module $CredManagerPath
 $EmailITAdminCred = Get-StoredCredential ITAdmin
-$EmailSubject = "Disabled User List from $CurrentDate"
 $EmailBody = "The following users have been inactive for 90+ days therefore their accounts have been disabled. Attached is the user list and their group memberships.`n`n$UsersNames"
-$EmailSMTPServer = "smtp.office365.com"
-$EmailFrom = "itcloudadmin@foresthome.org"
-$EmailAttachments = "$InactiveUsersFile", "$DisabledUserGroupsFile"
-
 Send-MailMessage -UseSsl -Credential $EmailITAdminCred -To $EmailTo -From $EmailFrom -SmtpServer $EmailSMTPServer -Attachments $EmailAttachments -Body $EmailBody -Subject $EmailSubject
